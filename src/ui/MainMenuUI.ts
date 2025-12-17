@@ -43,7 +43,7 @@ export class MainMenuUI {
                 ">Start Game</button>
 
                 <div style="margin-top: 40px; color: #888; font-size: 18px; font-family: monospace;">
-                    WASD to Move
+                    WASD to Move | Space to Dash
                 </div>
             </div>
         `;
