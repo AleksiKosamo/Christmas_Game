@@ -1,8 +1,8 @@
-
 import * as THREE from 'three';
 import { Input } from './Input';
 import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
+import { Present } from '../entities/Present';
 import { TimeSystem } from '../systems/TimeSystem';
 import { StatsSystem } from '../systems/StatsSystem';
 import { HUD } from '../ui/HUD';
@@ -10,6 +10,7 @@ import { Environment } from '../world/Environment';
 import { Town } from '../world/Town';
 // REMOVED: import { InteractionSystem } from '../systems/InteractionSystem';
 import { Snowball } from '../entities/Snowball';
+import { EnemyProjectile } from '../entities/EnemyProjectile';
 import { WaveManager } from '../systems/WaveManager';
 import { XPOrb } from '../entities/XPOrb';
 import { UpgradeSystem } from '../systems/UpgradeSystem';
@@ -19,11 +20,14 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 // @ts-ignore
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+// @ts-ignore
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { UpgradeUI } from '../ui/UpgradeUI';
 import { GameOverUI } from '../ui/GameOverUI';
 import { MainMenuUI } from '../ui/MainMenuUI';
 import { FloatingText } from '../entities/FloatingText';
 import { SoundManager } from '../systems/SoundManager';
+import { DevMenu } from '../ui/DevMenu';
 
 export class Game {
     private renderer: THREE.WebGLRenderer;
@@ -38,6 +42,9 @@ export class Game {
     private snowballs: Snowball[] = [];
     private xpOrbs: XPOrb[] = [];
     private floatingTexts: FloatingText[] = [];
+    private presents: Present[] = [];
+    private enemyProjectiles: EnemyProjectile[] = [];
+    private presentModel: THREE.Group | null = null;
     private clock: THREE.Clock;
 
     private timeSystem: TimeSystem;
@@ -51,6 +58,12 @@ export class Game {
     private gameOverUI: GameOverUI;
     private mainMenuUI: MainMenuUI;
     private soundManager: SoundManager;
+    private devMenu: DevMenu;
+
+    // Dev State
+    private lastNumpad6Time: number = 0;
+    private lastNumpad7Time: number = 0;
+    private godMode: boolean = false;
 
     // Stats tracking
     private enemiesKilled: number = 0;
@@ -71,6 +84,8 @@ export class Game {
     private playerXP: number = 0;
     private xpToNextLevel: number = 100;
     public xpPickupRange: number = 3.0; // Magnet range
+    public xpMultiplier: number = 1.0;
+    public difficulty: number = 1.0;
 
     // Advanced Combat Stats
     public projectileCount: number = 1; // Multishot
@@ -81,7 +96,8 @@ export class Game {
     // Ice Aura
     public hasIceAura: boolean = false;
     public iceAuraRadius: number = 3.0; // Visual radius
-    public iceAuraDamage: number = 2.0; // Damage per second
+    public iceAuraDamage: number = 2.0; // Damage per TICK
+    public iceAuraTickRate: number = 2.0; // Ticks per second
     public iceAuraMesh: THREE.Mesh | null = null;
 
     // Auto Slash
@@ -133,6 +149,40 @@ export class Game {
         this.mainMenuUI = new MainMenuUI();
         this.soundManager = new SoundManager();
 
+        // Dev Menu Initialization
+        this.devMenu = new DevMenu(
+            () => { // Add XP
+                this.playerXP += 1000;
+                this.soundManager.playLevelUp();
+            },
+            () => { // Spawn Boss
+                this.waveManager.spawnBoss(this.player.mesh.position, this.enemies, this.difficulty);
+            },
+            () => { // Heal
+                this.statsSystem.health = this.statsSystem.maxHealth;
+            },
+            () => { // Toggle God Mode
+                this.godMode = !this.godMode;
+                console.log("God Mode:", this.godMode);
+            }
+        );
+
+        // Dev Combo Listener
+        window.addEventListener('keydown', (e) => {
+            const now = Date.now();
+            if (e.code === 'Numpad6') {
+                this.lastNumpad6Time = now;
+                if (now - this.lastNumpad7Time < 500) {
+                    this.devMenu.toggle();
+                }
+            } else if (e.code === 'Numpad7') {
+                this.lastNumpad7Time = now;
+                if (now - this.lastNumpad6Time < 500) {
+                    this.devMenu.toggle();
+                }
+            }
+        });
+
         // Lighting
         const ambientLight = new THREE.AmbientLight(0x404040); // Soft white light
         this.scene.add(ambientLight);
@@ -140,6 +190,9 @@ export class Game {
         this.directionalLight = new THREE.DirectionalLight(0xffffff, 1);
         this.directionalLight.position.set(10, 20, 10);
         this.scene.add(this.directionalLight);
+
+        // Load Assets
+        this.loadAssets();
 
         // Add a ground plane
         const planeGeo = new THREE.PlaneGeometry(100, 100);
@@ -227,9 +280,16 @@ export class Game {
                 if (enemy.isDead) continue;
                 const dist = this.player.mesh.position.distanceTo(enemy.mesh.position);
                 if (dist < this.iceAuraRadius) {
-                    // Apply small DOT
-                    enemy.health -= this.iceAuraDamage * dt;
-                    if (enemy.health <= 0) this.killEnemy(enemy);
+                    // Tick Logic
+                    enemy.iceAuraTimer += dt;
+                    if (enemy.iceAuraTimer >= (1.0 / this.iceAuraTickRate)) {
+                        enemy.iceAuraTimer = 0;
+
+                        enemy.health -= this.iceAuraDamage;
+                        this.spawnFloatingText(enemy.mesh.position, this.iceAuraDamage.toFixed(0), "#00ffff");
+
+                        if (enemy.health <= 0) this.killEnemy(enemy);
+                    }
                     // Slow effect could go here
                 }
             }
@@ -248,7 +308,7 @@ export class Game {
                         if (enemy.health <= 0) this.killEnemy(enemy);
                         hitAny = true;
                         // Spawn text
-                        this.floatingTexts.push(new FloatingText(this.scene, enemy.mesh.position.clone().add(new THREE.Vector3(0, 2, 0)), "SLASH!", "#ff0000"));
+                        this.spawnFloatingText(enemy.mesh.position, this.slashDamage.toString(), "#ff0000");
                     }
                 }
 
@@ -287,10 +347,7 @@ export class Game {
         this.timeSystem.update(dt);
         this.statsSystem.update(dt);
         this.environment.update(dt, this.timeSystem.isNight);
-        this.waveManager.update(dt, this.player.mesh.position, this.enemies);
-        this.environment.update(dt, this.timeSystem.isNight);
-        this.environment.update(dt, this.timeSystem.isNight);
-        this.waveManager.update(dt, this.player.mesh.position, this.enemies, this.playerLevel);
+        this.waveManager.update(dt, this.player.mesh.position, this.enemies, this.difficulty, this.playerLevel);
 
         // Interaction
         // REMOVED INTERACTION SYSTEM LOGIC
@@ -365,7 +422,7 @@ export class Game {
                 if (dist < 1.0) { // Hit!
                     enemy.health -= this.projectileDamage;
                     // Spawn Floating Text
-                    this.floatingTexts.push(new FloatingText(this.scene, enemy.mesh.position.clone().add(new THREE.Vector3(0, 1.5, 0)), this.projectileDamage.toString(), "#ffffff"));
+                    this.spawnFloatingText(enemy.mesh.position, this.projectileDamage.toString(), "#ffffff");
                     this.soundManager.playHit();
 
                     // Despawn ball
@@ -395,11 +452,13 @@ export class Game {
             orb.update(dt); // Bobbing animation
 
             if (dist < 1.0) { // Collect (Collision radius)
-                this.playerXP += orb.value;
+                this.playerXP += orb.value * this.xpMultiplier;
                 if (this.playerXP >= this.xpToNextLevel) {
                     this.playerLevel++;
                     this.playerXP -= this.xpToNextLevel;
                     this.xpToNextLevel = Math.floor(this.xpToNextLevel * 1.2);
+                    this.difficulty += 0.05; // +5% difficulty
+                    console.log("Level Up! Difficulty:", this.difficulty.toFixed(2));
 
                     // Trigger Level Up
                     this.soundManager.playLevelUp();
@@ -432,6 +491,29 @@ export class Game {
             }
         }
 
+        // Present Logic
+        for (let i = this.presents.length - 1; i >= 0; i--) {
+            const present = this.presents[i];
+            present.update(dt);
+
+            // Check Collision
+            if (present.mesh.position.distanceTo(this.player.mesh.position) < 2.0) {
+                // Collect
+                this.soundManager.playLevelUp(); // Use LevelUp sound for now
+                this.spawnFloatingText(present.mesh.position, "BONUS UPGRADE!", "#ffd700");
+
+                // Grant Upgrade
+                const upgrades = this.upgradeSystem.getUpgrades(1, 100); // Reroll count high to ensure some randomness
+                if (upgrades.length > 0) {
+                    this.upgradeSystem.selectUpgrade(upgrades[0], this);
+                    this.collectedUpgrades.push("BONUS: " + upgrades[0].name);
+                }
+
+                present.dispose(this.scene);
+                this.presents.splice(i, 1);
+            }
+        }
+
         // Enemy Collision Damage
         // Debounce damage/visuals to avoid spamming text every frame? 
         // For simplicity, we just apply damage. Text might be too spamy if per frame.
@@ -442,8 +524,10 @@ export class Game {
             if (enemy.isDead) continue;
             const dist = this.player.mesh.position.distanceTo(enemy.mesh.position);
             if (dist < 1.5) { // Increased radius for easier hit
-                this.statsSystem.health -= 10 * dt; // Damage per second
-                takingDamage = true;
+                if (!this.godMode) {
+                    this.statsSystem.health -= enemy.damage * dt; // Scaled Damage
+                    takingDamage = true;
+                }
             }
         }
 
@@ -471,7 +555,15 @@ export class Game {
 
         // Update HUD (Custom text insert)
         // Update HUD
-        this.hud.update(this.timeSystem.formattedTime, this.statsSystem.health, this.statsSystem.maxHealth, this.playerXP, this.xpToNextLevel, this.playerLevel);
+        this.hud.update(this.timeSystem.formattedTime, this.statsSystem.health, this.statsSystem.maxHealth, this.playerXP, this.xpToNextLevel, this.playerLevel, this.difficulty);
+
+        // Update Boss HP Bar
+        const activeBoss = this.enemies.find(e => e.isBoss && !e.isDead);
+        if (activeBoss) {
+            this.hud.updateBossHealth(activeBoss.health, activeBoss.maxHealth, "EVIL SNOWMAN");
+        } else {
+            this.hud.hideBossHealth();
+        }
 
         // Remove old hack level display if exists
         const oldLevelDisplay = document.getElementById('level-display');
@@ -479,7 +571,36 @@ export class Game {
 
         this.player.update(dt, this.input, this.camera, this.soundManager);
 
-        this.enemies.forEach(enemy => enemy.update(dt, this.player.mesh.position, this.enemies));
+        // Callback for enemies to spawn projectiles
+        const spawnProjectile = (pos: THREE.Vector3, dir: THREE.Vector3) => {
+            if (this.enemyProjectiles.length < 50) { // Limit count
+                this.enemyProjectiles.push(new EnemyProjectile(this.scene, pos, dir));
+            }
+        };
+
+        this.enemies.forEach(enemy => enemy.update(dt, this.player.mesh.position, this.enemies, spawnProjectile));
+
+        // Update Enemy Projectiles
+        for (let i = this.enemyProjectiles.length - 1; i >= 0; i--) {
+            const proj = this.enemyProjectiles[i];
+            const alive = proj.update(dt);
+            if (!alive) {
+                proj.dispose(this.scene);
+                this.enemyProjectiles.splice(i, 1);
+                continue;
+            }
+
+            // Hit Player?
+            if (proj.mesh.position.distanceTo(this.player.mesh.position) < 0.8) {
+                if (!this.godMode) {
+                    this.statsSystem.health -= 20; // Big hit
+                    this.soundManager.playHit(); // Re-use hit sound
+                }
+                proj.dispose(this.scene);
+                this.enemyProjectiles.splice(i, 1);
+            }
+        }
+
 
         // Simple light animation
         // Fixed day lighting
@@ -504,7 +625,9 @@ export class Game {
         // this.renderer.render(this.scene, this.camera);
         this.composer.render();
         this.composer.render();
-    }
+    } // This closes the update method.
+
+
 
     private killEnemy(enemy: Enemy) {
         if (enemy.isDead) return;
@@ -523,5 +646,47 @@ export class Game {
         if (index > -1) {
             this.enemies.splice(index, 1);
         }
+    }
+
+    private loadAssets() {
+        const loader = new GLTFLoader();
+        loader.load('./models/Snowman.glb', (gltf: any) => {
+            const model = gltf.scene;
+            // Traverse to set shadows or material fixes if needed
+            model.traverse((child: any) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            this.waveManager.setEnemyModel(model);
+            console.log("Snowman model loaded!");
+        }, undefined, (error: any) => {
+            console.error('An error happened loading the model:', error);
+        });
+
+        loader.load('./models/Present.glb', (gltf: any) => {
+            const model = gltf.scene;
+            model.traverse((child: any) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            this.presentModel = model;
+            console.log("Present model loaded!");
+        }, undefined, (error: any) => {
+            console.error('An error happened loading the Present model:', error);
+        });
+    }
+
+    public spawnPresent(position: THREE.Vector3) {
+        if (this.presentModel) {
+            this.presents.push(new Present(this.scene, position, this.presentModel));
+        }
+    }
+
+    private spawnFloatingText(position: THREE.Vector3, text: string, color: string) {
+        this.floatingTexts.push(new FloatingText(this.scene, position.clone().add(new THREE.Vector3(0, 1.5, 0)), text, color));
     }
 }

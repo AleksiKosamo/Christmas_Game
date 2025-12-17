@@ -81,6 +81,18 @@ export class UpgradeSystem {
             description: 'Increase XP pickup range by ',
             apply: (_game: any) => {/* placeholder */ }
         },
+        {
+            id: 'xp_gain',
+            name: 'Christmas Spirit',
+            description: 'Increase XP Gain by ',
+            apply: (_game: any) => {/* placeholder */ }
+        },
+        {
+            id: 'health_regen',
+            name: 'Gingerbread Heart',
+            description: 'Regenerate HP per second',
+            apply: (_game: any) => {/* placeholder */ }
+        },
 
         // --- ICE AURA ---
         {
@@ -106,6 +118,13 @@ export class UpgradeSystem {
             condition: (game: any) => game.hasIceAura,
             apply: (_game: any) => {/* placeholder */ }
         },
+        {
+            id: 'ice_aura_speed',
+            name: 'Blizzard',
+            description: 'Increase Aura Tick Rate',
+            condition: (game: any) => game.hasIceAura,
+            apply: (_game: any) => {/* placeholder */ }
+        },
 
         // --- SLASH ---
         {
@@ -125,6 +144,15 @@ export class UpgradeSystem {
             apply: (_game: any) => {/* placeholder */ }
         }
     ];
+
+    // Alias for compatibility or rename
+    public getUpgrades(count: number, game: any): Upgrade[] {
+        return this.getRandomUpgrades(count, game);
+    }
+
+    public selectUpgrade(upgrade: Upgrade, game: any) {
+        upgrade.apply(game);
+    }
 
     public getRandomUpgrades(count: number, game: any): Upgrade[] {
         const available = this.upgrades.filter(u => !u.condition || u.condition(game));
@@ -212,6 +240,16 @@ export class UpgradeSystem {
                     dynamicUpgrade.description = `Increase XP range by ${mag.toFixed(0)}%`;
                     dynamicUpgrade.apply = (g) => g.xpPickupRange *= (1 + mag / 100);
                     break;
+                case 'xp_gain':
+                    const xpScale = 25 * multiplier;
+                    dynamicUpgrade.description = `Increase XP Gain by ${xpScale.toFixed(0)}%`;
+                    dynamicUpgrade.apply = (g) => g.xpMultiplier *= (1 + xpScale / 100);
+                    break;
+                case 'health_regen':
+                    const regenAmount = 2.0 * multiplier;
+                    dynamicUpgrade.description = `Regenerate ${regenAmount.toFixed(1)} HP/sec`;
+                    dynamicUpgrade.apply = (g) => g.statsSystem.healthRegen += regenAmount;
+                    break;
                 case 'ice_aura_radius':
                     const rad = 1.5 * multiplier;
                     dynamicUpgrade.description = `Increase Aura Radius by ${rad.toFixed(1)}`;
@@ -227,6 +265,11 @@ export class UpgradeSystem {
                     const auraDmg = 2.0 * multiplier;
                     dynamicUpgrade.description = `Increase Aura Damage by ${auraDmg.toFixed(1)}`;
                     dynamicUpgrade.apply = (g) => g.iceAuraDamage += auraDmg;
+                    break;
+                case 'ice_aura_speed':
+                    const auraSpeed = 0.5 * multiplier; // +0.5 ticks/sec for Common
+                    dynamicUpgrade.description = `Aura hits +${auraSpeed.toFixed(1)} times/sec`;
+                    dynamicUpgrade.apply = (g) => g.iceAuraTickRate += auraSpeed;
                     break;
                 case 'auto_slash_upgrade':
                     const slashDmg = 3 * multiplier;
