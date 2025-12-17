@@ -92,6 +92,7 @@ out
 
 # vuepress build output
 .vuepress/dist
+# docs - commented out to allow GitHub Pages deployment
 
 # Serverless directories
 .serverless/
