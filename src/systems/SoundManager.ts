@@ -73,6 +73,14 @@ export class SoundManager {
         this.playTone(1046.50, now + 0.8, 0.6); // C6
     }
 
+    playStartGame() {
+        // Festive start chime
+        const now = this.context.currentTime;
+        this.playTone(392.00, now, 0.1); // G4
+        this.playTone(523.25, now + 0.1, 0.1); // C5
+        this.playTone(659.25, now + 0.2, 0.3); // E5
+    }
+
     private playTone(freq: number, time: number, duration: number) {
         const osc = this.context.createOscillator();
         const gain = this.context.createGain();

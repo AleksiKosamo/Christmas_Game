@@ -35,29 +35,35 @@ export class WaveManager {
 
         if (this.spawnTimer >= currentSpawnRate && enemies.length < maxEnemies) {
             this.spawnTimer = 0;
-            this.spawnEnemy(playerPos, enemies, difficulty);
+            this.spawnEnemy(playerPos, enemies, difficulty, playerLevel);
         }
     }
 
-    private spawnEnemy(playerPos: THREE.Vector3, enemies: Enemy[], difficulty: number) {
-        // Random angle
-        const angle = Math.random() * Math.PI * 2;
-        const x = Math.cos(angle) * this.spawnRadius;
-        const z = Math.sin(angle) * this.spawnRadius;
+    public spawnEnemy(playerPos: THREE.Vector3, enemies: Enemy[], difficulty: number, playerLevel: number, overridePos?: THREE.Vector3) {
+        let spawnPos: THREE.Vector3;
 
-        const spawnPos = new THREE.Vector3(playerPos.x + x, 0, playerPos.z + z);
+        if (overridePos) {
+            spawnPos = overridePos.clone();
+        } else {
+            // Random angle
+            const angle = Math.random() * Math.PI * 2;
+            const x = Math.cos(angle) * this.spawnRadius;
+            const z = Math.sin(angle) * this.spawnRadius;
+            spawnPos = new THREE.Vector3(playerPos.x + x, 0, playerPos.z + z);
+        }
 
         // Roll Mutation
-        // Chance scales with difficulty.
-        // Diff 1.0 = 0% chance
-        // Diff 1.5 = 5% chance
-        // Diff 2.0 = 10% chance
-        const mutationChance = Math.max(0, (difficulty - 1.0) * 0.1);
-
+        // Mutations ONLY after level 10
         let mutation: MutationType = 'None';
-        if (Math.random() < mutationChance) {
-            const types: MutationType[] = ['Giant', 'Sprinter', 'Tank'];
-            mutation = types[Math.floor(Math.random() * types.length)];
+
+        if (playerLevel >= 10) {
+            // Chance scales with difficulty: base 0.1 at diff 1.0, 0.2 at diff 2.0, etc.
+            const mutationChance = Math.min(0.5, 0.1 * difficulty);
+
+            if (Math.random() < mutationChance) {
+                const types: MutationType[] = ['Giant', 'Sprinter', 'Tank'];
+                mutation = types[Math.floor(Math.random() * types.length)];
+            }
         }
 
         enemies.push(new Enemy(this.scene, spawnPos, this.enemyModel, mutation, difficulty));

@@ -1,63 +1,130 @@
 import * as THREE from 'three';
 
 export class Town {
-    public treeTrunk: THREE.Mesh;
+    public collidables: THREE.Object3D[] = [];
+    private scene: THREE.Scene;
 
     constructor(scene: THREE.Scene) {
-        // Grand Christmas Tree (Placeholder: Green Cylinder + Cone)
-        const trunkGeo = new THREE.CylinderGeometry(0.5, 0.5, 2);
-        const trunkMat = new THREE.MeshStandardMaterial({ color: 0x553311 });
-        this.treeTrunk = new THREE.Mesh(trunkGeo, trunkMat);
-        this.treeTrunk.position.set(0, 1, 0);
-        scene.add(this.treeTrunk);
+        this.scene = scene;
+        // Placeholders removed
+    }
 
-        const geometry = new THREE.ConeGeometry(3, 8, 8); // Assuming 'geometry' refers to the cone geometry
-        const material = new THREE.MeshStandardMaterial({
-            color: 0x228b22,
-            emissive: 0x004400,
-            emissiveIntensity: 0.5
-        });
-        const cone = new THREE.Mesh(geometry, material);
-        cone.position.y = 5; // Adjusted position to match original leaves height
-        scene.add(cone); // Add cone directly to scene
+    public createThickForest(treeModels: THREE.Group[]) {
+        if (treeModels.length === 0) {
+            console.error("No tree models provided to createThickForest!");
+            return;
+        }
 
-        // Add lights to the tree
-        const lightGeo = new THREE.SphereGeometry(0.2);
-        const lightMat = new THREE.MeshStandardMaterial({
-            color: 0xffff00,
-            emissive: 0xffff00,
-            emissiveIntensity: 2.0 // High intensity for bloom
-        });
-        const light = new THREE.Mesh(lightGeo, lightMat);
-        light.position.set(1, 2, 1);
-        cone.add(light); // Add light to the cone
+        console.log(`Creating forest around a 50x50 clear area...`);
 
-        // More lights
-        const light2 = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 2.0 }));
-        light2.position.set(-1, 3, 0);
-        cone.add(light2); // Add light to the cone
+        // 1. Core Arena Boundary (Start forest at 50x50 edge)
+        const arenaSize = 50;
+        const half = arenaSize / 2;
+        const layers = 6;
+        const spacing = 4;
 
-        // Houses (Placeholders: Cubes)
-        const houseLocations = [
-            { x: 10, z: 10 }, { x: -10, z: 10 },
-            { x: 10, z: -10 }, { x: -10, z: -10 },
-            { x: 15, z: 0 }, { x: -15, z: 0 }
-        ];
+        const addTree = (x: number, z: number) => {
+            const model = treeModels[Math.floor(Math.random() * treeModels.length)];
+            const tree = model.clone();
 
-        const houseGeo = new THREE.BoxGeometry(5, 5, 5);
-        const houseMat = new THREE.MeshStandardMaterial({ color: 0x885522 });
-        const roofGeo = new THREE.ConeGeometry(4, 2, 4);
-        const roofMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            // Force non-emissive to prevent wash-out/bloom
+            tree.traverse((child: any) => {
+                if (child.isMesh && child.material) {
+                    child.material.emissive = new THREE.Color(0x000000);
+                    child.material.emissiveIntensity = 0;
+                }
+            });
 
-        houseLocations.forEach(loc => {
-            const house = new THREE.Mesh(houseGeo, houseMat);
-            house.position.set(loc.x, 2.5, loc.z);
-            scene.add(house);
+            // Randomization for natural placement
+            const rx = x + (Math.random() * 4 - 2);
+            const rz = z + (Math.random() * 4 - 2);
 
-            const roof = new THREE.Mesh(roofGeo, roofMat);
-            roof.position.set(loc.x, 5 + 1, loc.z);
-            roof.rotation.y = Math.PI / 4;
-            scene.add(roof);
-        });
+            tree.position.set(rx, 0, rz);
+            // Randomize scale for variety (Imposing wall)
+            const s = 2.5 + Math.random() * 2.5;
+            tree.scale.set(s, s, s);
+            tree.rotation.y = Math.random() * Math.PI * 2;
+
+            this.scene.add(tree);
+            this.collidables.push(tree);
+        };
+
+        // Create the thick border starting exactly at the 50x50 clearing edge
+        for (let l = 0; l < layers; l++) {
+            const offset = l * 5;
+            const currentHalf = half + offset;
+
+            for (let i = -currentHalf; i <= currentHalf; i += spacing) {
+                addTree(i, -currentHalf);
+                addTree(i, currentHalf);
+                addTree(-currentHalf, i);
+                addTree(currentHalf, i);
+            }
+        }
+
+        // 2. Dense Internal forest REMOVED to keep the 50x50 area clear
+        console.log(`Forest created! 50x50 center is clear. Total trees: ${this.collidables.length}`);
+    }
+
+    public createDecorations(models: { [key: string]: THREE.Group }) {
+        const arenaSize = 50;
+        const half = arenaSize / 2;
+
+        const addDecoration = (model: THREE.Group, x: number, z: number, scale: number = 2) => {
+            const deco = model.clone();
+
+            // Force non-emissive to prevent wash-out/bloom
+            deco.traverse((child: any) => {
+                if (child.isMesh && child.material) {
+                    child.material.emissive = new THREE.Color(0x000000);
+                    child.material.emissiveIntensity = 0;
+                }
+            });
+
+            deco.position.set(x, 0, z);
+            deco.scale.set(scale, scale, scale);
+            deco.rotation.y = Math.random() * Math.PI * 2;
+            this.scene.add(deco);
+            this.collidables.push(deco);
+        };
+
+        // Scatter some Snowmen at the edges
+        if (models['Snowman']) {
+            for (let i = 0; i < 8; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = half + 2 + Math.random() * 5;
+                addDecoration(models['Snowman'], Math.cos(angle) * r, Math.sin(angle) * r, 1.5 + Math.random());
+            }
+        }
+
+        // Add some Snowy Houses deeper in the trees (Removed Igloos)
+        if (models['Snowy House']) {
+            for (let i = 0; i < 6; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = half + 12 + Math.random() * 10;
+                addDecoration(models['Snowy House'], Math.cos(angle) * r, Math.sin(angle) * r, 3);
+            }
+        }
+
+        // --- Hard Boundary Walls (Invisible Barriers) ---
+        // This ensures the player cannot walk into the forest layers
+        const wallThickness = 2;
+        const wallHeight = 20;
+        const wallMaterial = new THREE.MeshBasicMaterial({ visible: false }); // Invisible
+
+        const createWall = (x: number, z: number, w: number, d: number) => {
+            const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallHeight, d), wallMaterial);
+            wall.position.set(x, wallHeight / 2, z);
+            this.scene.add(wall);
+            this.collidables.push(wall);
+        };
+
+        // Walls placed at the 50x50 boundary
+        createWall(0, half + wallThickness / 2, arenaSize + wallThickness * 2, wallThickness); // Top
+        createWall(0, -(half + wallThickness / 2), arenaSize + wallThickness * 2, wallThickness); // Bottom
+        createWall(half + wallThickness / 2, 0, wallThickness, arenaSize + wallThickness * 2); // Right
+        createWall(-(half + wallThickness / 2), 0, wallThickness, arenaSize + wallThickness * 2); // Left
+
+        console.log("Hard forest boundaries and decorations initialized.");
     }
 }

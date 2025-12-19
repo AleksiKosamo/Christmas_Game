@@ -1,3 +1,5 @@
+import { StorageSystem } from '../systems/StorageSystem';
+
 export class MainMenuUI {
     private container: HTMLElement;
 
@@ -27,8 +29,11 @@ export class MainMenuUI {
         this.container.innerHTML = `
             <div style="text-align: center; max-width: 800px; padding: 50px; border-radius: 20px; background: rgba(0,0,0,0.5); border: 2px solid #555; box-shadow: 0 0 50px rgba(0,0,0,0.8);">
                 <h1 style="font-size: 100px; color: #ff3333; margin: 0; text-shadow: 0 0 20px red; letter-spacing: 5px;">Christmas Survival</h1>
-                <p style="font-size: 30px; color: #aaa; margin-top: 10px; margin-bottom: 50px;">Can you survive the Christmas Eve blizzard?</p>
+                <p style="font-size: 30px; color: #aaa; margin-top: 10px; margin-bottom: 30px;">Can you survive the Christmas Eve blizzard?</p>
                 
+                <div style="margin-bottom: 40px; color: #ffcc00; font-size: 24px; text-shadow: 0 0 10px rgba(255,204,0,0.5);">
+                    🏆 Personal Best: <span style="font-family: monospace;">${StorageSystem.formatTime(StorageSystem.getBestTime())}</span>
+                </div>
                 <button id="start-btn" style="
                     padding: 20px 60px;
                     font-size: 40px;

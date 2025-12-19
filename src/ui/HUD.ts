@@ -43,7 +43,7 @@ export class HUD {
         }
     }
 
-    public update(time: string, health: number, maxHealth: number, xp: number, maxXp: number, level: number, difficulty: number) {
+    public update(time: string, health: number, maxHealth: number, xp: number, maxXp: number, level: number, difficulty: number, healthRegen: number = 0) {
         if (this.timeDisplay) this.timeDisplay.innerText = time;
 
         // Update Bars
@@ -52,7 +52,10 @@ export class HUD {
 
             this.barsContainer.innerHTML = `
                 <div style="margin-bottom: 10px;">
-                    <div style="color: #ff4444; font-weight: bold; margin-bottom:2px;">HEALTH ${Math.ceil(health)}/${maxHealth}</div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px;">
+                        <div style="color: #ff4444; font-weight: bold;">HEALTH ${Math.ceil(health)}/${maxHealth}</div>
+                        ${healthRegen > 0 ? `<div style="color: #44ff44; font-size: 11px; font-weight: bold; background: rgba(0,255,0,0.1); padding: 1px 4px; border-radius: 3px; border: 1px solid rgba(0,255,0,0.2);">+${healthRegen.toFixed(1)}/s</div>` : ''}
+                    </div>
                     <div style="width: 100%; height: 15px; background: rgba(0,0,0,0.6); border: 2px solid #ff4444; border-radius: 4px; overflow: hidden;">
                         <div style="width: ${healthPct}%; height: 100%; background: #ff4444; transition: width 0.2s;"></div>
                     </div>

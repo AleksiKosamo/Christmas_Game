@@ -142,6 +142,44 @@ export class UpgradeSystem {
             description: 'Slash deals +Damage and Cooldown reduction',
             condition: (game: any) => game.hasAutoSlash,
             apply: (_game: any) => {/* placeholder */ }
+        },
+
+        // --- NEW WEAPONS ---
+        {
+            id: 'ornaments_unlock',
+            name: 'Festive Ornaments',
+            description: 'Unlock: Sharp ornaments orbit you and damage enemies',
+            condition: (game: any) => !game.hasOrnaments,
+            apply: (game: any) => {
+                game.hasOrnaments = true;
+                game.ornamentCount = 1;
+            }
+        },
+        {
+            id: 'ornament_upgrade',
+            name: 'More Ornaments',
+            description: 'Add more orbiting ornaments',
+            condition: (game: any) => game.hasOrnaments,
+            apply: (_game: any) => { /* placeholder */ }
+        },
+        {
+            id: 'gift_bomb_unlock',
+            name: 'Gift Bomb',
+            description: 'Unlock: Throw explosive gifts that deal area damage',
+            condition: (game: any) => !game.hasGiftBomb,
+            apply: (game: any) => {
+                game.hasGiftBomb = true;
+                game.giftBombLevel = 1;
+            }
+        },
+        {
+            id: 'naughty_list_unlock',
+            name: 'Naughty List',
+            description: 'Unlock: Enemies take 30% more damage from all sources',
+            condition: (game: any) => !game.hasNaughtyList,
+            apply: (game: any) => {
+                game.hasNaughtyList = true;
+            }
         }
     ];
 
@@ -278,6 +316,20 @@ export class UpgradeSystem {
                     dynamicUpgrade.apply = (g) => {
                         g.slashDamage += slashDmg;
                         g.slashCooldown = Math.max(0.2, g.slashCooldown * (1 - slashCd / 100));
+                    };
+                    break;
+                case 'ornament_upgrade':
+                    const extraOrnaments = Math.max(1, Math.floor(1 * multiplier));
+                    dynamicUpgrade.description = `Add +${extraOrnaments} orbiting ornaments`;
+                    dynamicUpgrade.apply = (g) => g.ornamentCount += extraOrnaments;
+                    break;
+                case 'gift_bomb_level':
+                    const bombScale = 1.2 * multiplier;
+                    dynamicUpgrade.description = `Increase gift bomb explosion size and damage`;
+                    dynamicUpgrade.apply = (g) => {
+                        g.giftBombLevel += 1;
+                        g.giftBombDamage *= bombScale;
+                        g.giftBombRadius *= bombScale;
                     };
                     break;
                 default:

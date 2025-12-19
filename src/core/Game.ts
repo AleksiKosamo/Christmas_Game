@@ -28,6 +28,7 @@ import { MainMenuUI } from '../ui/MainMenuUI';
 import { FloatingText } from '../entities/FloatingText';
 import { SoundManager } from '../systems/SoundManager';
 import { DevMenu } from '../ui/DevMenu';
+import { LoadingUI } from '../ui/LoadingUI';
 
 export class Game {
     private renderer: THREE.WebGLRenderer;
@@ -37,6 +38,7 @@ export class Game {
     // @ts-ignore
     private bloomPass: UnrealBloomPass;
     private input: Input;
+    private town: Town;
     private player: Player;
     private enemies: Enemy[] = [];
     private snowballs: Snowball[] = [];
@@ -59,6 +61,7 @@ export class Game {
     private mainMenuUI: MainMenuUI;
     private soundManager: SoundManager;
     private devMenu: DevMenu;
+    private loadingUI: LoadingUI;
 
     // Dev State
     private lastNumpad6Time: number = 0;
@@ -109,13 +112,48 @@ export class Game {
     public slashMesh: THREE.Mesh | null = null;
     public slashEffectTimer: number = 0; // For visual feedback
 
+    // Camera State
+    private cameraYaw: number = 0;
+    private cameraPitch: number = 0.5; // Start slightly tilted down
+    private cameraDistance: number = 10;
+    private raycaster: THREE.Raycaster = new THREE.Raycaster();
+
+    // Weapon State - NEW
+    public hasOrnaments: boolean = false;
+    public ornamentCount: number = 0;
+    private ornamentMeshes: THREE.Mesh[] = [];
+    private ornamentRotation: number = 0;
+
+    public hasGiftBomb: boolean = false;
+    public giftBombLevel: number = 0;
+    public giftBombDamage: number = 10;
+    public giftBombRadius: number = 5;
+    public giftBombCooldown: number = 5.0;
+    private currentGiftBombCooldown: number = 0;
+    private activeGifts: any[] = []; // Simple projectiles
+
+    public hasNaughtyList: boolean = false;
+
+    // Loading State
+    private loadedTrees: THREE.Group[] = [];
+    private treesToLoad: string[] = ['tree1', 'tree2', 'tree3'];
+    private loadedDecorations: { [key: string]: THREE.Group } = {};
+    private decorationsToLoad: string[] = ['Snowy House', 'Snowman', 'ornament'];
+    private ornamentModel: THREE.Group | null = null;
+
     constructor() {
-        this.renderer = new THREE.WebGLRenderer({ antialias: false }); // Antialias false is better for post-processing performance usually, or let composer handle it
+        this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 0.8; // Reduced exposure
+        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         document.getElementById('app')?.appendChild(this.renderer.domElement);
-
         this.scene = new THREE.Scene();
+
+        // Snowy Day Atmosphere (Slightly more overcast to prevent wash-out)
+        this.scene.fog = new THREE.FogExp2(0xbdc9d6, 0.012);
+        this.scene.background = new THREE.Color(0xbdc9d6);
 
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.camera.position.set(0, 5, 10);
@@ -124,10 +162,10 @@ export class Game {
         // Post-Processing Setup
         const renderScene = new RenderPass(this.scene, this.camera);
 
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-        bloomPass.threshold = 0.8; // Only very bright things glow
-        bloomPass.strength = 1.5; // Stronger glow for those who qualify
-        bloomPass.radius = 1.0;
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.15, 0.4, 0.85);
+        bloomPass.threshold = 1.0; // Raise threshold significantly
+        bloomPass.strength = 0.15; // Drastically lower strength
+        bloomPass.radius = 0.4;
         this.bloomPass = bloomPass;
 
         this.composer = new EffectComposer(this.renderer);
@@ -148,24 +186,29 @@ export class Game {
         this.gameOverUI = new GameOverUI();
         this.mainMenuUI = new MainMenuUI();
         this.soundManager = new SoundManager();
+        this.loadingUI = new LoadingUI();
 
         // Dev Menu Initialization
-        this.devMenu = new DevMenu(
-            () => { // Add XP
+        this.devMenu = new DevMenu({
+            onAddXP: () => {
                 this.playerXP += 1000;
                 this.soundManager.playLevelUp();
             },
-            () => { // Spawn Boss
-                this.waveManager.spawnBoss(this.player.mesh.position, this.enemies, this.difficulty);
-            },
-            () => { // Heal
+            onLevelUp: () => this.devTriggerLevelUp(),
+            onHeal: () => {
                 this.statsSystem.health = this.statsSystem.maxHealth;
             },
-            () => { // Toggle God Mode
+            onKillAll: () => this.devKillAllEnemies(),
+            onSpawnBoss: () => {
+                this.waveManager.spawnBoss(this.player.mesh.position, this.enemies, this.difficulty);
+            },
+            onSpawnPresent: () => this.devSpawnBonusPresent(),
+            onToggleGodMode: () => {
                 this.godMode = !this.godMode;
                 console.log("God Mode:", this.godMode);
-            }
-        );
+            },
+            onChangeDifficulty: (delta: number) => this.devUpdateDifficulty(delta)
+        });
 
         // Dev Combo Listener
         window.addEventListener('keydown', (e) => {
@@ -184,44 +227,48 @@ export class Game {
         });
 
         // Lighting
-        const ambientLight = new THREE.AmbientLight(0x404040); // Soft white light
+        const ambientLight = new THREE.AmbientLight(0xb0c4de, 0.4); // Subdued ambient
         this.scene.add(ambientLight);
 
-        this.directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-        this.directionalLight.position.set(10, 20, 10);
+        this.directionalLight = new THREE.DirectionalLight(0xfffaf0, 0.7); // Subdued directional
+        this.directionalLight.position.set(50, 100, 50);
+        this.directionalLight.castShadow = true;
         this.scene.add(this.directionalLight);
 
         // Load Assets
+
         this.loadAssets();
 
-        // Add a ground plane
-        const planeGeo = new THREE.PlaneGeometry(100, 100);
-        const planeMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.DoubleSide });
-        const plane = new THREE.Mesh(planeGeo, planeMat);
-        plane.rotation.x = -Math.PI / 2;
-        this.scene.add(plane);
+        // Initial Floor / Grid (Centered on 100x100 play area)
+        const floorGeo = new THREE.PlaneGeometry(400, 400); // Larger floor for forest depth
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0xf0f8ff }); // AliceBlue snow
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        this.scene.add(floor);
 
-        // Add grid helper
-        const gridHelper = new THREE.GridHelper(100, 100);
+        const gridHelper = new THREE.GridHelper(400, 40, 0x444466, 0x222244); // Subdued festive grid
         this.scene.add(gridHelper);
 
-        new Town(this.scene);
+        this.town = new Town(this.scene);
         this.player = new Player(this.scene);
 
         // Enemies managed by WaveManager now
 
         window.addEventListener('resize', () => this.onWindowResize());
 
-        // SHOW MENU
+        // Initial state is Paused and in Menu
         this.isPaused = true;
         this.inMenu = true;
-        this.mainMenuUI.show(() => {
-            this.inMenu = false;
-            this.isPaused = false;
-            this.clock.getDelta(); // Reset clock
-        });
 
         this.animate();
+
+        // Add click to lock
+        window.addEventListener('click', () => {
+            if (!this.inMenu && !this.isPaused) {
+                this.input.requestPointerLock();
+            }
+        });
     }
 
     private onWindowResize() {
@@ -247,8 +294,7 @@ export class Game {
             this.camera.lookAt(0, 0, 0);
 
             // Update environment (snow, lights)
-            this.environment.update(dt, true); // Keep it night? or time based?
-            // Let time pass? No, maybe static night
+            this.environment.update(dt);
 
             this.composer.render();
             return;
@@ -257,7 +303,7 @@ export class Game {
         if (this.isPaused) return;
 
         const dt = this.clock.getDelta();
-        this.input.update(); // Reset mousePressed
+        // REMOVED: this.input.update(); It will be called at the end of the frame
 
         // ICE AURA LOGIC
         if (this.hasIceAura) {
@@ -285,7 +331,7 @@ export class Game {
                     if (enemy.iceAuraTimer >= (1.0 / this.iceAuraTickRate)) {
                         enemy.iceAuraTimer = 0;
 
-                        enemy.health -= this.iceAuraDamage;
+                        enemy.takeDamage(this.iceAuraDamage);
                         this.spawnFloatingText(enemy.mesh.position, this.iceAuraDamage.toFixed(0), "#00ffff");
 
                         if (enemy.health <= 0) this.killEnemy(enemy);
@@ -304,7 +350,7 @@ export class Game {
                 for (const enemy of this.enemies) {
                     if (enemy.isDead) continue;
                     if (this.player.mesh.position.distanceTo(enemy.mesh.position) < this.slashRadius) {
-                        enemy.health -= this.slashDamage;
+                        enemy.takeDamage(this.slashDamage);
                         if (enemy.health <= 0) this.killEnemy(enemy);
                         hitAny = true;
                         // Spawn text
@@ -346,7 +392,7 @@ export class Game {
         // Update Systems
         this.timeSystem.update(dt);
         this.statsSystem.update(dt);
-        this.environment.update(dt, this.timeSystem.isNight);
+        this.environment.update(dt);
         this.waveManager.update(dt, this.player.mesh.position, this.enemies, this.difficulty, this.playerLevel);
 
         // Interaction
@@ -420,7 +466,7 @@ export class Game {
                 const dist = ball.mesh.position.distanceTo(enemy.mesh.position);
 
                 if (dist < 1.0) { // Hit!
-                    enemy.health -= this.projectileDamage;
+                    enemy.takeDamage(this.projectileDamage);
                     // Spawn Floating Text
                     this.spawnFloatingText(enemy.mesh.position, this.projectileDamage.toString(), "#ffffff");
                     this.soundManager.playHit();
@@ -454,26 +500,7 @@ export class Game {
             if (dist < 1.0) { // Collect (Collision radius)
                 this.playerXP += orb.value * this.xpMultiplier;
                 if (this.playerXP >= this.xpToNextLevel) {
-                    this.playerLevel++;
-                    this.playerXP -= this.xpToNextLevel;
-                    this.xpToNextLevel = Math.floor(this.xpToNextLevel * 1.2);
-                    this.difficulty += 0.05; // +5% difficulty
-                    console.log("Level Up! Difficulty:", this.difficulty.toFixed(2));
-
-                    // Trigger Level Up
-                    this.soundManager.playLevelUp();
-                    this.isPaused = true;
-                    // Reset inputs to prevent stuck keys
-                    // this.input.keys.clear(); // If input class supports it
-
-                    const choices = this.upgradeSystem.getRandomUpgrades(3, this);
-                    this.upgradeUI.show(choices, (upgrade) => {
-                        upgrade.apply(this);
-                        this.collectedUpgrades.push(upgrade.name);
-                        this.isPaused = false;
-                        // Reset clock delta so we don't have a huge jump
-                        this.clock.getDelta();
-                    });
+                    this.triggerLevelUp();
                 }
 
                 orb.dispose(this.scene);
@@ -502,11 +529,24 @@ export class Game {
                 this.soundManager.playLevelUp(); // Use LevelUp sound for now
                 this.spawnFloatingText(present.mesh.position, "BONUS UPGRADE!", "#ffd700");
 
-                // Grant Upgrade
-                const upgrades = this.upgradeSystem.getUpgrades(1, 100); // Reroll count high to ensure some randomness
+                // Pause game while showing bonus upgrade card
+                this.isPaused = true;
+                this.input.exitPointerLock();
+
+                // Roll a single upgrade and show it as a card
+                const upgrades = this.upgradeSystem.getRandomUpgrades(1, this);
                 if (upgrades.length > 0) {
-                    this.upgradeSystem.selectUpgrade(upgrades[0], this);
-                    this.collectedUpgrades.push("BONUS: " + upgrades[0].name);
+                    const chosen = upgrades[0];
+                    this.upgradeUI.show([chosen], (upgrade) => {
+                        upgrade.apply(this);
+                        this.collectedUpgrades.push("BONUS: " + upgrade.name);
+                        this.isPaused = false;
+                        // Reset clock delta so we don't get a huge jump after pause
+                        this.clock.getDelta();
+                    }, "BONUS PRESENT!");
+                } else {
+                    // If for some reason no upgrade is available, just resume
+                    this.isPaused = false;
                 }
 
                 present.dispose(this.scene);
@@ -544,9 +584,11 @@ export class Game {
         // Check Death
         if (this.statsSystem.isDead && !this.isPaused) {
             this.isPaused = true;
+            this.input.exitPointerLock();
             this.gameOverUI.show({
                 killed: this.enemiesKilled,
                 time: this.timeSystem.formattedTime,
+                rawTime: this.timeSystem.totalTime,
                 level: this.playerLevel,
                 upgrades: this.collectedUpgrades
             });
@@ -555,7 +597,7 @@ export class Game {
 
         // Update HUD (Custom text insert)
         // Update HUD
-        this.hud.update(this.timeSystem.formattedTime, this.statsSystem.health, this.statsSystem.maxHealth, this.playerXP, this.xpToNextLevel, this.playerLevel, this.difficulty);
+        this.hud.update(this.timeSystem.formattedTime, this.statsSystem.health, this.statsSystem.maxHealth, this.playerXP, this.xpToNextLevel, this.playerLevel, this.difficulty, this.statsSystem.healthRegen);
 
         // Update Boss HP Bar
         const activeBoss = this.enemies.find(e => e.isBoss && !e.isDead);
@@ -578,7 +620,22 @@ export class Game {
             }
         };
 
-        this.enemies.forEach(enemy => enemy.update(dt, this.player.mesh.position, this.enemies, spawnProjectile));
+        this.enemies.forEach(enemy => {
+            enemy.update(
+                dt,
+                this.player.mesh.position,
+                this.enemies,
+                spawnProjectile,
+                (pos) => {
+                    this.waveManager.spawnEnemy(this.player.mesh.position, this.enemies, this.difficulty, this.playerLevel, pos);
+                },
+                (amt) => {
+                    if (!this.godMode) {
+                        this.statsSystem.health -= amt;
+                    }
+                }
+            );
+        });
 
         // Update Enemy Projectiles
         for (let i = this.enemyProjectiles.length - 1; i >= 0; i--) {
@@ -602,30 +659,152 @@ export class Game {
         }
 
 
-        // Simple light animation
-        // Fixed day lighting
-        this.directionalLight.intensity = 1.0;
-        this.bloomPass.strength = THREE.MathUtils.lerp(this.bloomPass.strength, 0.2, dt);
-
-
-        // TPS Camera Logic
+        // Free Look Camera Logic
         if (this.input.isLocked) {
-            // Rotate player mesh (Yaw)
-            this.player.mesh.rotation.y -= this.input.movementX * 0.002;
+            this.cameraYaw -= this.input.movementX * 0.003;
+            this.cameraPitch += this.input.movementY * 0.003;
+
+            // Clamp pitch to avoid flipping
+            const minPitch = -Math.PI / 4; // Look up limit
+            const maxPitch = Math.PI / 2.5; // Look down limit
+            this.cameraPitch = Math.max(minPitch, Math.min(maxPitch, this.cameraPitch));
         }
 
-        // Camera Follow
-        const offset = new THREE.Vector3(0, 5, 8); // Height 5, Distance 8
-        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.player.mesh.rotation.y);
+        // Camera Positioning with Collision
+        const idealOffset = new THREE.Vector3(
+            this.cameraDistance * Math.sin(this.cameraYaw) * Math.cos(this.cameraPitch),
+            this.cameraDistance * Math.sin(this.cameraPitch),
+            this.cameraDistance * Math.cos(this.cameraYaw) * Math.cos(this.cameraPitch)
+        );
 
-        const targetPos = this.player.mesh.position.clone().add(offset);
-        this.camera.position.lerp(targetPos, 0.1);
-        this.camera.lookAt(this.player.mesh.position.clone().add(new THREE.Vector3(0, 2, 0))); // Look slightly above player
+        const playerPos = this.player.mesh.position.clone().add(new THREE.Vector3(0, 1.5, 0));
+        const rayDir = idealOffset.clone().normalize();
+        this.raycaster.set(playerPos, rayDir);
 
-        // this.renderer.render(this.scene, this.camera);
+        const collidables = [...this.town.collidables];
+        const intersects = this.raycaster.intersectObjects(collidables);
+
+        let finalDistance = this.cameraDistance;
+        if (intersects.length > 0 && intersects[0].distance < this.cameraDistance) {
+            finalDistance = Math.max(1.0, intersects[0].distance - 0.5);
+        }
+
+        // Quick ground check (y limit)
+        const targetCamPos = playerPos.clone().add(rayDir.multiplyScalar(finalDistance));
+        if (targetCamPos.y < 0.5) {
+            // Adjust distance to keep camera above ground
+            const factor = (playerPos.y - 0.5) / (playerPos.y - targetCamPos.y);
+            finalDistance *= factor;
+            targetCamPos.copy(playerPos).add(rayDir.normalize().multiplyScalar(finalDistance));
+        }
+
+        this.camera.position.lerp(targetCamPos, 0.4);
+        this.camera.lookAt(playerPos);
+
+        // --- NEW WEAPON LOGIC ---
+
+        // Festive Ornaments (Orbital)
+        if (this.hasOrnaments && this.ornamentModel) {
+            this.ornamentRotation += 2 * dt;
+
+            // Sync count
+            while (this.ornamentMeshes.length < this.ornamentCount) {
+                const mesh = this.ornamentModel.clone();
+                // Random scale variation - BOOSTED STILL
+                const s = 2.5 + Math.random() * 0.5;
+                mesh.scale.set(s, s, s);
+                this.scene.add(mesh);
+                this.ornamentMeshes.push(mesh as any);
+            }
+
+            this.ornamentMeshes.forEach((mesh, i) => {
+                const angle = this.ornamentRotation + (i / this.ornamentCount) * Math.PI * 2;
+                const radius = 3;
+                mesh.position.set(
+                    this.player.mesh.position.x + Math.sin(angle) * radius,
+                    this.player.mesh.position.y + 1,
+                    this.player.mesh.position.z + Math.cos(angle) * radius
+                );
+
+                // Spin individual ornament
+                mesh.rotation.y += dt;
+
+                // Simple collision
+                for (const enemy of this.enemies) {
+                    if (!enemy.isDead && mesh.position.distanceTo(enemy.mesh.position) < 1.5) {
+                        enemy.takeDamage(5 * dt * (this.hasNaughtyList ? 1.3 : 1));
+                    }
+                }
+            });
+        }
+
+        // Gift Bomb
+        if (this.hasGiftBomb) {
+            this.currentGiftBombCooldown -= dt;
+            if (this.currentGiftBombCooldown <= 0) {
+                this.currentGiftBombCooldown = this.giftBombCooldown;
+                // Launch gift
+                const giftGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+                const giftMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+                const gift = new THREE.Mesh(giftGeo, giftMat);
+                gift.position.copy(this.player.mesh.position).add(new THREE.Vector3(0, 2, 0));
+
+                // Find nearest enemy to throw at
+                let targetEnemy = null;
+                let minDist = 20;
+                for (const e of this.enemies) {
+                    if (e.isDead) continue;
+                    const d = this.player.mesh.position.distanceTo(e.mesh.position);
+                    if (d < minDist) { minDist = d; targetEnemy = e; }
+                }
+
+                const dir = targetEnemy ?
+                    new THREE.Vector3().subVectors(targetEnemy.mesh.position, gift.position).normalize() :
+                    new THREE.Vector3(Math.random() - 0.5, 0.5, Math.random() - 0.5).normalize();
+
+                this.scene.add(gift);
+                this.activeGifts.push({ mesh: gift, dir, time: 2.0 });
+            }
+
+            for (let i = this.activeGifts.length - 1; i >= 0; i--) {
+                const g = this.activeGifts[i];
+                g.mesh.position.addScaledVector(g.dir, 15 * dt);
+                g.time -= dt;
+
+                let exploded = g.time <= 0;
+                if (!exploded) {
+                    for (const enemy of this.enemies) {
+                        if (!enemy.isDead && g.mesh.position.distanceTo(enemy.mesh.position) < 1.5) {
+                            exploded = true; break;
+                        }
+                    }
+                }
+
+                if (exploded) {
+                    // Explosion visual (Flash)
+                    const flashGeo = new THREE.SphereGeometry(this.giftBombRadius);
+                    const flashMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+                    const flash = new THREE.Mesh(flashGeo, flashMat);
+                    flash.position.copy(g.mesh.position);
+                    this.scene.add(flash);
+                    setTimeout(() => this.scene.remove(flash), 100);
+
+                    // Area Damage
+                    for (const enemy of this.enemies) {
+                        if (!enemy.isDead && g.mesh.position.distanceTo(enemy.mesh.position) < this.giftBombRadius) {
+                            enemy.takeDamage(this.giftBombDamage * (this.hasNaughtyList ? 1.3 : 1));
+                        }
+                    }
+
+                    this.scene.remove(g.mesh);
+                    this.activeGifts.splice(i, 1);
+                }
+            }
+        }
+
+        this.input.update();
         this.composer.render();
-        this.composer.render();
-    } // This closes the update method.
+    }
 
 
 
@@ -637,9 +816,22 @@ export class Game {
         // Drop XP
         this.xpOrbs.push(new XPOrb(this.scene, enemy.mesh.position.clone()));
 
+        // Drop Presents when a Boss is killed
+        if (enemy.isBoss) {
+            const basePos = enemy.mesh.position.clone();
+            const offsets = [
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(1.5, 0, 0),
+                new THREE.Vector3(-1.5, 0, 0),
+            ];
+            offsets.forEach(offset => {
+                this.spawnPresent(basePos.clone().add(offset));
+            });
+        }
+
         // Enemy death
         enemy.isDead = true;
-        this.scene.remove(enemy.mesh);
+        enemy.dispose(this.scene);
 
         // Remove from array
         const index = this.enemies.indexOf(enemy);
@@ -649,7 +841,37 @@ export class Game {
     }
 
     private loadAssets() {
-        const loader = new GLTFLoader();
+        // Setup Loading Manager
+        const manager = new THREE.LoadingManager();
+
+        manager.onStart = (url, itemsLoaded, itemsTotal) => {
+            console.log('Started loading file: ' + url + '.\nLoaded ' + itemsLoaded + ' of ' + itemsTotal + ' files.');
+        };
+
+        manager.onProgress = (url, itemsLoaded, itemsTotal) => {
+            const progress = itemsLoaded / itemsTotal;
+            this.loadingUI.update(progress, url);
+        };
+
+        manager.onLoad = () => {
+            console.log('Loading complete!');
+            setTimeout(() => {
+                this.loadingUI.hide();
+                this.mainMenuUI.show(() => {
+                    this.inMenu = false;
+                    this.isPaused = false;
+                    this.clock.getDelta(); // Reset clock
+                    this.soundManager.playStartGame();
+                    this.input.requestPointerLock();
+                });
+            }, 500);
+        };
+
+        manager.onError = (url) => {
+            console.log('There was an error loading ' + url);
+        };
+
+        const loader = new GLTFLoader(manager);
         loader.load('./models/Snowman.glb', (gltf: any) => {
             const model = gltf.scene;
             // Traverse to set shadows or material fixes if needed
@@ -678,6 +900,95 @@ export class Game {
         }, undefined, (error: any) => {
             console.error('An error happened loading the Present model:', error);
         });
+
+        loader.load('./models/Santa Claus.glb', (gltf: any) => {
+            const model = gltf.scene;
+            model.traverse((child: any) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            this.player.setModel(model, gltf.animations);
+            console.log("Santa Claus model loaded!");
+        }, undefined, (error: any) => {
+            console.error('An error happened loading the Santa model:', error);
+        });
+
+        // Load Multiple Tree Models
+        this.treesToLoad.forEach(treeName => {
+            loader.load(`./models/${treeName}.glb`, (gltf: any) => {
+                const model = gltf.scene;
+                model.traverse((child: any) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+
+                // Correct centering
+                const wrapper = new THREE.Group();
+                const box = new THREE.Box3().setFromObject(model);
+                const center = new THREE.Vector3();
+                box.getCenter(center);
+                model.position.x = -center.x;
+                model.position.z = -center.z;
+                model.position.y = -box.min.y;
+                wrapper.add(model);
+
+                this.loadedTrees.push(wrapper);
+                console.log(`${treeName} loaded!`);
+
+                if (this.loadedTrees.length === this.treesToLoad.length) {
+                    this.town.createThickForest(this.loadedTrees);
+                }
+            });
+        });
+
+        // Load Decorations
+        this.decorationsToLoad.forEach(decoName => {
+            loader.load(`./models/${decoName}.glb`, (gltf: any) => {
+                const model = gltf.scene;
+                model.traverse((child: any) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        // Force non-emissive
+                        if (child.material) {
+                            child.material.emissive.set(0x000000);
+                            child.material.emissiveIntensity = 0;
+                        }
+                    }
+                });
+
+                // Center models
+                const wrapper = new THREE.Group();
+                const box = new THREE.Box3().setFromObject(model);
+                const center = new THREE.Vector3();
+                box.getCenter(center);
+                model.position.x = -center.x;
+                model.position.z = -center.z;
+                model.position.y = -box.min.y;
+                wrapper.add(model);
+
+                this.loadedDecorations[decoName] = wrapper;
+
+                // Special check for the weapon model
+                if (decoName === 'ornament') {
+                    this.ornamentModel = wrapper;
+                }
+
+                console.log(`${decoName} deco loaded!`);
+
+                // Create decorations if all are loaded (excluding the weapon)
+                const decoRequired = this.decorationsToLoad.filter(d => d !== 'ornament');
+                const decoLoaded = Object.keys(this.loadedDecorations).filter(d => d !== 'ornament');
+
+                if (decoLoaded.length === decoRequired.length) {
+                    this.town.createDecorations(this.loadedDecorations);
+                }
+            });
+        });
     }
 
     public spawnPresent(position: THREE.Vector3) {
@@ -688,5 +999,51 @@ export class Game {
 
     private spawnFloatingText(position: THREE.Vector3, text: string, color: string) {
         this.floatingTexts.push(new FloatingText(this.scene, position.clone().add(new THREE.Vector3(0, 1.5, 0)), text, color));
+    }
+
+    // --- Dev Tools ---
+
+    public devKillAllEnemies() {
+        // Use a copy to avoid splice issues while iterating
+        const activeEnemies = [...this.enemies];
+        activeEnemies.forEach(e => this.killEnemy(e));
+        console.log("DEV: All enemies killed.");
+    }
+
+    public devTriggerLevelUp() {
+        this.triggerLevelUp();
+        console.log("DEV: Level up triggered.");
+    }
+
+    public devSpawnBonusPresent() {
+        this.spawnPresent(this.player.mesh.position.clone());
+        console.log("DEV: Bonus present spawned.");
+    }
+
+    public devUpdateDifficulty(delta: number) {
+        this.difficulty = Math.max(0.5, this.difficulty + delta);
+        console.log("DEV: Difficulty set to:", this.difficulty.toFixed(2));
+    }
+
+    private triggerLevelUp() {
+        this.playerLevel++;
+        this.playerXP = Math.max(0, this.playerXP - this.xpToNextLevel);
+        this.xpToNextLevel = Math.floor(this.xpToNextLevel * 1.2);
+        this.difficulty += 0.05; // +5% difficulty
+        console.log("Level Up! Difficulty:", this.difficulty.toFixed(2));
+
+        // Trigger Level Up
+        this.soundManager.playLevelUp();
+        this.isPaused = true;
+        this.input.exitPointerLock();
+
+        const choices = this.upgradeSystem.getRandomUpgrades(3, this);
+        this.upgradeUI.show(choices, (upgrade) => {
+            upgrade.apply(this);
+            this.collectedUpgrades.push(upgrade.name);
+            this.isPaused = false;
+            // Reset clock delta so we don't have a huge jump
+            this.clock.getDelta();
+        });
     }
 }

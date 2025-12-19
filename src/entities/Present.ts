@@ -9,8 +9,8 @@ export class Present {
         this.mesh.position.copy(position);
 
         const model = modelTemplate.clone();
-        // Adjust scale/offset
-        model.scale.set(1.5, 1.5, 1.5);
+        // Adjust scale/offset - make the present even bigger
+        model.scale.set(3.0, 3.0, 3.0);
         this.mesh.add(model);
 
         // Add a simple bobbing animation or light

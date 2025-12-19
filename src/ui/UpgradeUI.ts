@@ -21,7 +21,7 @@ export class UpgradeUI {
         document.body.appendChild(this.container);
     }
 
-    public show(upgrades: Upgrade[], onSelect: (upgrade: Upgrade) => void) {
+    public show(upgrades: Upgrade[], onSelect: (upgrade: Upgrade) => void, titleText: string = "LEVEL UP!") {
         this.onSelectCallback = onSelect;
         this.container.innerHTML = '';
         this.container.style.display = 'flex';
@@ -52,7 +52,7 @@ export class UpgradeUI {
         });
 
         const title = document.createElement('h1');
-        title.innerText = "LEVEL UP!";
+        title.innerText = titleText;
         title.style.color = "white";
         title.style.position = "absolute";
         title.style.top = "10%";

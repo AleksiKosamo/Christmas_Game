@@ -25,6 +25,12 @@ export class Input {
         document.body.requestPointerLock();
     }
 
+    public exitPointerLock() {
+        if (document.exitPointerLock) {
+            document.exitPointerLock();
+        }
+    }
+
     private onKeyDown(event: KeyboardEvent) {
         this.keys[event.code] = true;
     }
